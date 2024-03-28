@@ -28,6 +28,13 @@
 #define CURL_NO_OLDIES
 #endif
 
+/* FIXME: Delete this once the warnings have been fixed. */
+#if !defined(CURL_WARN_SIGN_CONVERSION)
+#ifdef __GNUC__
+#pragma GCC diagnostic ignored "-Wsign-conversion"
+#endif
+#endif
+
 /* Set default _WIN32_WINNT */
 #ifdef __MINGW32__
 #include <_mingw.h>
@@ -41,15 +48,7 @@
 #pragma warning(disable:4127)
 #endif
 
-/*
- * Define WIN32 when build target is Win32 API
- */
-
-#if (defined(_WIN32) || defined(__WIN32__)) && !defined(WIN32)
-#define WIN32
-#endif
-
-#ifdef WIN32
+#ifdef _WIN32
 /*
  * Don't include unneeded stuff in Windows headers to avoid compiler
  * warnings and macro clashes.
@@ -87,7 +86,7 @@
 #ifdef _WIN32_WCE
 #  include "config-win32ce.h"
 #else
-#  ifdef WIN32
+#  ifdef _WIN32
 #    include "config-win32.h"
 #  endif
 #endif
@@ -261,11 +260,45 @@
  * Windows setup file includes some system headers.
  */
 
-#ifdef HAVE_WINDOWS_H
+#ifdef _WIN32
 #  include "setup-win32.h"
 #endif
 
 #include <curl/system.h>
+
+/* Helper macro to expand and concatenate two macros.
+ * Direct macros concatenation does not work because macros
+ * are not expanded before direct concatenation.
+ */
+#define CURL_CONC_MACROS_(A,B) A ## B
+#define CURL_CONC_MACROS(A,B) CURL_CONC_MACROS_(A,B)
+
+/* curl uses its own printf() function internally. It understands the GNU
+ * format. Use this format, so that is matches the GNU format attribute we
+ * use with the mingw compiler, allowing it to verify them at compile-time.
+ */
+#ifdef  __MINGW32__
+#  undef CURL_FORMAT_CURL_OFF_T
+#  undef CURL_FORMAT_CURL_OFF_TU
+#  define CURL_FORMAT_CURL_OFF_T   "lld"
+#  define CURL_FORMAT_CURL_OFF_TU  "llu"
+#endif
+
+/* based on logic in "curl/mprintf.h" */
+
+#if (defined(__GNUC__) || defined(__clang__)) &&                        \
+  defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L) &&         \
+  !defined(CURL_NO_FMT_CHECKS)
+#if defined(__MINGW32__) && !defined(__clang__)
+#define CURL_PRINTF(fmt, arg) \
+  __attribute__((format(gnu_printf, fmt, arg)))
+#else
+#define CURL_PRINTF(fmt, arg) \
+  __attribute__((format(__printf__, fmt, arg)))
+#endif
+#else
+#define CURL_PRINTF(fmt, arg)
+#endif
 
 /*
  * Use getaddrinfo to resolve the IPv4 address literal. If the current network
@@ -416,6 +449,24 @@
 #define SIZEOF_TIME_T 4
 #endif
 
+#ifndef SIZEOF_CURL_SOCKET_T
+/* configure and cmake check and set the define */
+#  ifdef _WIN64
+#    define SIZEOF_CURL_SOCKET_T 8
+#  else
+/* default guess */
+#    define SIZEOF_CURL_SOCKET_T 4
+#  endif
+#endif
+
+#if SIZEOF_CURL_SOCKET_T < 8
+#  define CURL_FORMAT_SOCKET_T "d"
+#elif defined(__MINGW32__)
+#  define CURL_FORMAT_SOCKET_T "zd"
+#else
+#  define CURL_FORMAT_SOCKET_T "qd"
+#endif
+
 /*
  * Default sizeof(off_t) in case it hasn't been defined in config file.
  */
@@ -450,6 +501,17 @@
 #  define CURL_OFF_T_MAX CURL_OFF_T_C(0x7FFFFFFFFFFFFFFF)
 #endif
 #define CURL_OFF_T_MIN (-CURL_OFF_T_MAX - CURL_OFF_T_C(1))
+
+#if (SIZEOF_CURL_OFF_T != 8)
+#  error "curl_off_t must be exactly 64 bits"
+#else
+  typedef unsigned CURL_TYPEOF_CURL_OFF_T curl_uint64_t;
+#  ifndef CURL_SUFFIX_CURL_OFF_TU
+#    error "CURL_SUFFIX_CURL_OFF_TU must be defined"
+#  endif
+#  define CURL_UINT64_SUFFIX  CURL_SUFFIX_CURL_OFF_TU
+#  define CURL_UINT64_C(val)  CURL_CONC_MACROS(val,CURL_UINT64_SUFFIX)
+#endif
 
 #if (SIZEOF_TIME_T == 4)
 #  ifdef HAVE_TIME_T_UNSIGNED
@@ -505,11 +567,11 @@
    5. set dir/file naming defines
    */
 
-#ifdef WIN32
+#ifdef _WIN32
 
 #  define DIR_CHAR      "\\"
 
-#else /* WIN32 */
+#else /* _WIN32 */
 
 #  ifdef MSDOS  /* Watt-32 */
 
@@ -534,11 +596,7 @@
 
 #  define DIR_CHAR      "/"
 
-#  ifndef fileno /* sunos 4 have this as a macro! */
-     int fileno(FILE *stream);
-#  endif
-
-#endif /* WIN32 */
+#endif /* _WIN32 */
 
 /* ---------------------------------------------------------------- */
 /*             resolver specialty compile-time defines              */
@@ -561,7 +619,7 @@
 
 #if defined(ENABLE_IPV6) && defined(HAVE_GETADDRINFO)
 #  define CURLRES_IPV6
-#elif defined(ENABLE_IPV6) && (defined(WIN32) || defined(__CYGWIN__))
+#elif defined(ENABLE_IPV6) && (defined(_WIN32) || defined(__CYGWIN__))
 /* assume on Windows that IPv6 without getaddrinfo is a broken build */
 #  error "Unexpected build: IPv6 is enabled but getaddrinfo was not found."
 #else
@@ -648,6 +706,29 @@
 #  define WARN_UNUSED_RESULT
 #endif
 
+/* noreturn attribute */
+
+#if !defined(CURL_NORETURN)
+#if (defined(__GNUC__) && (__GNUC__ >= 3)) || defined(__clang__)
+#  define CURL_NORETURN  __attribute__((__noreturn__))
+#elif defined(_MSC_VER) && (_MSC_VER >= 1200)
+#  define CURL_NORETURN  __declspec(noreturn)
+#else
+#  define CURL_NORETURN
+#endif
+#endif
+
+/* fallthrough attribute */
+
+#if !defined(FALLTHROUGH)
+#if (defined(__GNUC__) && __GNUC__ >= 7) || \
+    (defined(__clang__) && __clang_major__ >= 10)
+#  define FALLTHROUGH()  __attribute__((fallthrough))
+#else
+#  define FALLTHROUGH()  do {} while (0)
+#endif
+#endif
+
 /*
  * Include macros and defines that should only be processed once.
  */
@@ -669,10 +750,7 @@
  */
 
 #if defined(__LWIP_OPT_H__) || defined(LWIP_HDR_OPT_H)
-#  if defined(SOCKET) || \
-     defined(USE_WINSOCK) || \
-     defined(HAVE_WINSOCK2_H) || \
-     defined(HAVE_WS2TCPIP_H)
+#  if defined(SOCKET) || defined(USE_WINSOCK)
 #    error "WinSock and lwIP TCP/IP stack definitions shall not coexist!"
 #  endif
 #endif
@@ -706,7 +784,7 @@
 /* In Windows the default file mode is text but an application can override it.
 Therefore we specify it explicitly. https://github.com/curl/curl/pull/258
 */
-#if defined(WIN32) || defined(MSDOS)
+#if defined(_WIN32) || defined(MSDOS)
 #define FOPEN_READTEXT "rt"
 #define FOPEN_WRITETEXT "wt"
 #define FOPEN_APPENDTEXT "at"
@@ -761,12 +839,19 @@ int getpwuid_r(uid_t uid, struct passwd *pwd, char *buf,
 #define UNITTEST static
 #endif
 
-#if defined(USE_NGHTTP2) || defined(USE_HYPER)
+/* Hyper supports HTTP2 also, but Curl's integration with Hyper does not */
+#if defined(USE_NGHTTP2)
 #define USE_HTTP2
 #endif
 
 #if (defined(USE_NGTCP2) && defined(USE_NGHTTP3)) || \
+    (defined(USE_OPENSSL_QUIC) && defined(USE_NGHTTP3)) || \
     defined(USE_QUICHE) || defined(USE_MSH3)
+
+#ifdef CURL_WITH_MULTI_SSL
+#error "Multi-SSL combined with QUIC is not supported"
+#endif
+
 #define ENABLE_QUIC
 #define USE_HTTP3
 #endif
@@ -774,11 +859,11 @@ int getpwuid_r(uid_t uid, struct passwd *pwd, char *buf,
 /* Certain Windows implementations are not aligned with what curl expects,
    so always use the local one on this platform. E.g. the mingw-w64
    implementation can return wrong results for non-ASCII inputs. */
-#if defined(HAVE_BASENAME) && defined(WIN32)
+#if defined(HAVE_BASENAME) && defined(_WIN32)
 #undef HAVE_BASENAME
 #endif
 
-#if defined(USE_UNIX_SOCKETS) && defined(WIN32)
+#if defined(USE_UNIX_SOCKETS) && defined(_WIN32)
 #  if !defined(UNIX_PATH_MAX)
      /* Replicating logic present in afunix.h
         (distributed with newer Windows 10 SDK versions only) */

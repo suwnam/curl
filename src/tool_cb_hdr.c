@@ -41,9 +41,9 @@
 
 static char *parse_filename(const char *ptr, size_t len);
 
-#ifdef WIN32
-#define BOLD
-#define BOLDOFF
+#ifdef _WIN32
+#define BOLD "\x1b[1m"
+#define BOLDOFF "\x1b[22m"
 #else
 #define BOLD "\x1b[1m"
 /* Switch off bold by setting "all attributes off" since the explicit
@@ -87,7 +87,7 @@ size_t tool_header_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
   }
 #endif
 
-#ifdef WIN32
+#ifdef _WIN32
   /* Discard incomplete UTF-8 sequence buffered from body */
   if(outs->utf8seq[0])
     memset(outs->utf8seq, 0, sizeof(outs->utf8seq));
@@ -105,12 +105,21 @@ size_t tool_header_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
     (void)fflush(heads->stream);
   }
 
-  /*
-   * Write etag to file when --etag-save option is given.
-   */
-  if(per->config->etag_save_file && etag_save->stream) {
-    /* match only header that start with etag (case insensitive) */
-    if(curl_strnequal(str, "etag:", 5)) {
+  curl_easy_getinfo(per->curl, CURLINFO_SCHEME, &scheme);
+  scheme = proto_token(scheme);
+  if((scheme == proto_http || scheme == proto_https)) {
+    long response = 0;
+    curl_easy_getinfo(per->curl, CURLINFO_RESPONSE_CODE, &response);
+
+    if(response/100 != 2)
+      /* only care about these headers in 2xx responses */
+      ;
+    /*
+     * Write etag to file when --etag-save option is given.
+     */
+    else if(per->config->etag_save_file && etag_save->stream &&
+            /* match only header that start with etag (case insensitive) */
+            checkprefix("etag:", str)) {
       const char *etag_h = &str[5];
       const char *eot = end - 1;
       if(*eot == '\n') {
@@ -128,69 +137,75 @@ size_t tool_header_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
         }
       }
     }
-  }
 
-  /*
-   * This callback sets the filename where output shall be written when
-   * curl options --remote-name (-O) and --remote-header-name (-J) have
-   * been simultaneously given and additionally server returns an HTTP
-   * Content-Disposition header specifying a filename property.
-   */
+    /*
+     * This callback sets the filename where output shall be written when
+     * curl options --remote-name (-O) and --remote-header-name (-J) have
+     * been simultaneously given and additionally server returns an HTTP
+     * Content-Disposition header specifying a filename property.
+     */
 
-  curl_easy_getinfo(per->curl, CURLINFO_SCHEME, &scheme);
-  scheme = proto_token(scheme);
-  if(hdrcbdata->honor_cd_filename &&
-     (cb > 20) && checkprefix("Content-disposition:", str) &&
-     (scheme == proto_http || scheme == proto_https)) {
-    const char *p = str + 20;
+    else if(hdrcbdata->honor_cd_filename &&
+            (cb > 20) && checkprefix("Content-disposition:", str)) {
+      const char *p = str + 20;
 
-    /* look for the 'filename=' parameter
-       (encoded filenames (*=) are not supported) */
-    for(;;) {
-      char *filename;
-      size_t len;
+      /* look for the 'filename=' parameter
+         (encoded filenames (*=) are not supported) */
+      for(;;) {
+        char *filename;
+        size_t len;
 
-      while((p < end) && *p && !ISALPHA(*p))
-        p++;
-      if(p > end - 9)
-        break;
-
-      if(memcmp(p, "filename=", 9)) {
-        /* no match, find next parameter */
-        while((p < end) && *p && (*p != ';'))
+        while((p < end) && *p && !ISALPHA(*p))
           p++;
-        if((p < end) && *p)
-          continue;
-        else
+        if(p > end - 9)
           break;
-      }
-      p += 9;
 
-      /* this expression below typecasts 'cb' only to avoid
-         warning: signed and unsigned type in conditional expression
-      */
-      len = (ssize_t)cb - (p - str);
-      filename = parse_filename(p, len);
-      if(filename) {
-        if(outs->stream) {
-          /* indication of problem, get out! */
-          free(filename);
-          return CURL_WRITEFUNC_ERROR;
+        if(memcmp(p, "filename=", 9)) {
+          /* no match, find next parameter */
+          while((p < end) && *p && (*p != ';'))
+            p++;
+          if((p < end) && *p)
+            continue;
+          else
+            break;
         }
+        p += 9;
 
-        outs->is_cd_filename = TRUE;
-        outs->s_isreg = TRUE;
-        outs->fopened = FALSE;
-        outs->filename = filename;
-        outs->alloc_filename = TRUE;
-        hdrcbdata->honor_cd_filename = FALSE; /* done now! */
-        if(!tool_create_output_file(outs, per->config))
-          return CURL_WRITEFUNC_ERROR;
+        /* this expression below typecasts 'cb' only to avoid
+           warning: signed and unsigned type in conditional expression
+        */
+        len = (ssize_t)cb - (p - str);
+        filename = parse_filename(p, len);
+        if(filename) {
+          if(outs->stream) {
+            /* indication of problem, get out! */
+            free(filename);
+            return CURL_WRITEFUNC_ERROR;
+          }
+
+          if(per->config->output_dir) {
+            outs->filename = aprintf("%s/%s", per->config->output_dir,
+                                     filename);
+            free(filename);
+            if(!outs->filename)
+              return CURL_WRITEFUNC_ERROR;
+          }
+          else
+            outs->filename = filename;
+
+          outs->is_cd_filename = TRUE;
+          outs->s_isreg = TRUE;
+          outs->fopened = FALSE;
+          outs->alloc_filename = TRUE;
+          hdrcbdata->honor_cd_filename = FALSE; /* done now! */
+          if(!tool_create_output_file(outs, per->config))
+            return CURL_WRITEFUNC_ERROR;
+        }
+        break;
       }
-      break;
+      if(!outs->stream && !tool_create_output_file(outs, per->config))
+        return CURL_WRITEFUNC_ERROR;
     }
-    if(!outs->stream && !tool_create_output_file(outs, per->config))
-      return CURL_WRITEFUNC_ERROR;
   }
   if(hdrcbdata->config->writeout) {
     char *value = memchr(ptr, ':', cb);
@@ -212,7 +227,11 @@ size_t tool_header_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
     if(!outs->stream && !tool_create_output_file(outs, per->config))
       return CURL_WRITEFUNC_ERROR;
 
-    if(hdrcbdata->global->isatty && hdrcbdata->global->styled_output)
+    if(hdrcbdata->global->isatty &&
+#ifdef _WIN32
+       tool_term_has_bold &&
+#endif
+       hdrcbdata->global->styled_output)
       value = memchr(ptr, ':', cb);
     if(value) {
       size_t namelen = value - ptr;
@@ -300,7 +319,7 @@ static char *parse_filename(const char *ptr, size_t len)
   if(copy != p)
     memmove(copy, p, strlen(p) + 1);
 
-#if defined(MSDOS) || defined(WIN32)
+#if defined(_WIN32) || defined(MSDOS)
   {
     char *sanitized;
     SANITIZEcode sc = sanitize_file_name(&sanitized, copy, 0);
@@ -309,7 +328,7 @@ static char *parse_filename(const char *ptr, size_t len)
       return NULL;
     copy = sanitized;
   }
-#endif /* MSDOS || WIN32 */
+#endif /* _WIN32 || MSDOS */
 
   /* in case we built debug enabled, we allow an environment variable
    * named CURL_TESTDIR to prefix the given file name to put it into a

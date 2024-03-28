@@ -172,7 +172,7 @@ static CURLcode add_certs_data_to_store(HCERTSTORE trust_store,
           /* Sanity check that the cert_context object is the right type */
           if(CERT_QUERY_CONTENT_CERT != actual_content_type) {
             failf(data,
-                  "schannel: unexpected content type '%d' when extracting "
+                  "schannel: unexpected content type '%lu' when extracting "
                   "certificate from CA file '%s'",
                   actual_content_type, ca_file_text);
             result = CURLE_SSL_CACERT_BADFILE;
@@ -470,7 +470,7 @@ CURLcode Curl_verify_host(struct Curl_cfilter *cf,
   CERT_CONTEXT *pCertContextServer = NULL;
   TCHAR *cert_hostname_buff = NULL;
   size_t cert_hostname_buff_index = 0;
-  const char *conn_hostname = connssl->hostname;
+  const char *conn_hostname = connssl->peer.hostname;
   size_t hostlen = strlen(conn_hostname);
   DWORD len = 0;
   DWORD actual_len = 0;
@@ -753,7 +753,7 @@ CURLcode Curl_verify_certificate(struct Curl_cfilter *cf,
           failf(data, "schannel: CertGetCertificateChain trust error"
                 " CERT_TRUST_REVOCATION_STATUS_UNKNOWN");
         else
-          failf(data, "schannel: CertGetCertificateChain error mask: 0x%08x",
+          failf(data, "schannel: CertGetCertificateChain error mask: 0x%08lx",
                 dwTrustErrorMask);
         result = CURLE_PEER_FAILED_VERIFICATION;
       }

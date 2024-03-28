@@ -117,6 +117,8 @@ static ssize_t gtls_pull(void *s, void *buf, size_t blen)
                                (CURLE_AGAIN == result)? EAGAIN : EINVAL);
     nread = -1;
   }
+  else if(nread == 0)
+    connssl->peer_closed = TRUE;
   return nread;
 }
 
@@ -402,18 +404,13 @@ set_ssl_version_min_max(struct Curl_easy *data,
 CURLcode gtls_client_init(struct Curl_easy *data,
                           struct ssl_primary_config *config,
                           struct ssl_config_data *ssl_config,
-                          const char *hostname,
+                          struct ssl_peer *peer,
                           struct gtls_instance *gtls,
                           long *pverifyresult)
 {
   unsigned int init_flags;
   int rc;
   bool sni = TRUE; /* default is SNI enabled */
-#ifdef ENABLE_IPV6
-  struct in6_addr addr;
-#else
-  struct in_addr addr;
-#endif
   const char *prioritylist;
   const char *err = NULL;
   const char *tls13support;
@@ -547,15 +544,9 @@ CURLcode gtls_client_init(struct Curl_easy *data,
     return CURLE_SSL_CONNECT_ERROR;
   }
 
-  if((0 == Curl_inet_pton(AF_INET, hostname, &addr)) &&
-#ifdef ENABLE_IPV6
-     (0 == Curl_inet_pton(AF_INET6, hostname, &addr)) &&
-#endif
-     sni) {
-    size_t snilen;
-    char *snihost = Curl_ssl_snihost(data, hostname, &snilen);
-    if(!snihost || gnutls_server_name_set(gtls->session, GNUTLS_NAME_DNS,
-                                          snihost, snilen) < 0) {
+  if(sni && peer->sni) {
+    if(gnutls_server_name_set(gtls->session, GNUTLS_NAME_DNS,
+                              peer->sni, strlen(peer->sni)) < 0) {
       failf(data, "Failed to set SNI");
       return CURLE_SSL_CONNECT_ERROR;
     }
@@ -595,13 +586,9 @@ CURLcode gtls_client_init(struct Curl_easy *data,
   /* Only add SRP to the cipher list if SRP is requested. Otherwise
    * GnuTLS will disable TLS 1.3 support. */
   if(config->username) {
-    size_t len = strlen(prioritylist);
-
-    char *prioritysrp = malloc(len + sizeof(GNUTLS_SRP) + 1);
+    char *prioritysrp = aprintf("%s:" GNUTLS_SRP, prioritylist);
     if(!prioritysrp)
       return CURLE_OUT_OF_MEMORY;
-    strcpy(prioritysrp, prioritylist);
-    strcpy(prioritysrp + len, ":" GNUTLS_SRP);
     rc = gnutls_priority_set_direct(gtls->session, prioritysrp, &err);
     free(prioritysrp);
 
@@ -709,7 +696,7 @@ gtls_connect_step1(struct Curl_cfilter *cf, struct Curl_easy *data)
     return CURLE_OK;
 
   result = gtls_client_init(data, conn_config, ssl_config,
-                            connssl->hostname,
+                            &connssl->peer,
                             &backend->gtls, pverifyresult);
   if(result)
     return result;
@@ -821,8 +808,7 @@ Curl_gtls_verifyserver(struct Curl_easy *data,
                        gnutls_session_t session,
                        struct ssl_primary_config *config,
                        struct ssl_config_data *ssl_config,
-                       const char *hostname,
-                       const char *dispname,
+                       struct ssl_peer *peer,
                        const char *pinned_key)
 {
   unsigned int cert_list_size;
@@ -834,16 +820,17 @@ Curl_gtls_verifyserver(struct Curl_easy *data,
   char certname[65] = ""; /* limited to 64 chars by ASN.1 */
   size_t size;
   time_t certclock;
-  const char *ptr;
   int rc;
   CURLcode result = CURLE_OK;
 #ifndef CURL_DISABLE_VERBOSE_STRINGS
+  const char *ptr;
   unsigned int algo;
   unsigned int bits;
   gnutls_protocol_t version = gnutls_protocol_get_version(session);
 #endif
   long * const certverifyresult = &ssl_config->certverifyresult;
 
+#ifndef CURL_DISABLE_VERBOSE_STRINGS
   /* the name of the cipher suite used, e.g. ECDHE_RSA_AES_256_GCM_SHA384. */
   ptr = gnutls_cipher_suite_get_name(gnutls_kx_get(session),
                                      gnutls_cipher_get(session),
@@ -851,6 +838,7 @@ Curl_gtls_verifyserver(struct Curl_easy *data,
 
   infof(data, "SSL connection using %s / %s",
         gnutls_protocol_get_name(version), ptr);
+#endif
 
   /* This function will return the peer's raw certificate (chain) as sent by
      the peer. These certificates are in raw format (DER encoded for
@@ -1078,7 +1066,7 @@ Curl_gtls_verifyserver(struct Curl_easy *data,
      in RFC2818 (HTTPS), which takes into account wildcards, and the subject
      alternative name PKIX extension. Returns non zero on success, and zero on
      failure. */
-  rc = gnutls_x509_crt_check_hostname(x509_cert, hostname);
+  rc = gnutls_x509_crt_check_hostname(x509_cert, peer->hostname);
 #if GNUTLS_VERSION_NUMBER < 0x030306
   /* Before 3.3.6, gnutls_x509_crt_check_hostname() didn't check IP
      addresses. */
@@ -1091,10 +1079,10 @@ Curl_gtls_verifyserver(struct Curl_easy *data,
     unsigned char addrbuf[sizeof(struct use_addr)];
     size_t addrlen = 0;
 
-    if(Curl_inet_pton(AF_INET, hostname, addrbuf) > 0)
+    if(Curl_inet_pton(AF_INET, peer->hostname, addrbuf) > 0)
       addrlen = 4;
 #ifdef ENABLE_IPV6
-    else if(Curl_inet_pton(AF_INET6, hostname, addrbuf) > 0)
+    else if(Curl_inet_pton(AF_INET6, peer->hostname, addrbuf) > 0)
       addrlen = 16;
 #endif
 
@@ -1124,13 +1112,13 @@ Curl_gtls_verifyserver(struct Curl_easy *data,
   if(!rc) {
     if(config->verifyhost) {
       failf(data, "SSL: certificate subject name (%s) does not match "
-            "target host name '%s'", certname, dispname);
+            "target host name '%s'", certname, peer->dispname);
       gnutls_x509_crt_deinit(x509_cert);
       return CURLE_PEER_FAILED_VERIFICATION;
     }
     else
       infof(data, "  common name: %s (does not match '%s')",
-            certname, dispname);
+            certname, peer->dispname);
   }
   else
     infof(data, "  common name: %s (matched)", certname);
@@ -1263,8 +1251,7 @@ static CURLcode gtls_verifyserver(struct Curl_cfilter *cf,
   CURLcode result;
 
   result = Curl_gtls_verifyserver(data, session, conn_config, ssl_config,
-                                  connssl->hostname, connssl->dispname,
-                                  pinned_key);
+                                  &connssl->peer, pinned_key);
   if(result)
     goto out;
 
@@ -1504,7 +1491,7 @@ static int gtls_shutdown(struct Curl_cfilter *cf,
     bool done = FALSE;
     char buf[120];
 
-    while(!done) {
+    while(!done && !connssl->peer_closed) {
       int what = SOCKET_READABLE(Curl_conn_cf_get_socket(cf, data),
                                  SSL_SHUTDOWN_TIMEOUT);
       if(what > 0) {

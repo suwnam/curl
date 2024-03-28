@@ -39,7 +39,7 @@
 
 #ifdef USE_ARES
 #  if defined(CURL_STATICLIB) && !defined(CARES_STATICLIB) &&   \
-  defined(WIN32)
+  defined(_WIN32)
 #    define CARES_STATICLIB
 #  endif
 #  include <ares.h>
@@ -211,8 +211,18 @@ char *curl_version(void)
 #endif
 
 #ifdef USE_LIBPSL
-  msnprintf(psl_version, sizeof(psl_version), "libpsl/%s", psl_get_version());
-  src[i++] = psl_version;
+  {
+#if defined(PSL_VERSION_MAJOR) && (PSL_VERSION_MAJOR > 0 ||     \
+                                   PSL_VERSION_MINOR >= 11)
+    int num = psl_check_version_number(0);
+    msnprintf(psl_version, sizeof(psl_version), "libpsl/%d.%d.%d",
+              num >> 16, (num >> 8) & 0xff, num & 0xff);
+#else
+    msnprintf(psl_version, sizeof(psl_version), "libpsl/%s",
+              psl_get_version());
+#endif
+    src[i++] = psl_version;
+  }
 #endif
 
 #ifdef USE_SSH
@@ -455,7 +465,7 @@ static const struct feat features_table[] = {
 #ifndef CURL_DISABLE_HSTS
   FEATURE("HSTS",        NULL,                CURL_VERSION_HSTS),
 #endif
-#if defined(USE_NGHTTP2) || defined(USE_HYPER)
+#if defined(USE_NGHTTP2)
   FEATURE("HTTP2",       NULL,                CURL_VERSION_HTTP2),
 #endif
 #if defined(ENABLE_QUIC)
@@ -512,7 +522,7 @@ static const struct feat features_table[] = {
 #ifdef CURLDEBUG
   FEATURE("TrackMemory", NULL,                CURL_VERSION_CURLDEBUG),
 #endif
-#if defined(WIN32) && defined(UNICODE) && defined(_UNICODE)
+#if defined(_WIN32) && defined(UNICODE) && defined(_UNICODE)
   FEATURE("Unicode",     NULL,                CURL_VERSION_UNICODE),
 #endif
 #ifdef USE_UNIX_SOCKETS

@@ -80,6 +80,9 @@
 /* disables GOPHER */
 #cmakedefine CURL_DISABLE_GOPHER 1
 
+/* disables headers-api support */
+#cmakedefine CURL_DISABLE_HEADERS_API 1
+
 /* disables HSTS support */
 #cmakedefine CURL_DISABLE_HSTS 1
 
@@ -100,6 +103,9 @@
 
 /* disables MIME support */
 #cmakedefine CURL_DISABLE_MIME 1
+
+/* disables local binding support */
+#cmakedefine CURL_DISABLE_BINDLOCAL 1
 
 /* disables MQTT */
 #cmakedefine CURL_DISABLE_MQTT 1
@@ -170,9 +176,6 @@
 
 /* Define to 1 if you have _Atomic support. */
 #cmakedefine HAVE_ATOMIC 1
-
-/* Define to 1 if you have the `fchmod' function. */
-#cmakedefine HAVE_FCHMOD 1
 
 /* Define to 1 if you have the `fnmatch' function. */
 #cmakedefine HAVE_FNMATCH 1
@@ -294,12 +297,6 @@
 
 /* if you have the GNU gssapi libraries */
 #cmakedefine HAVE_GSSGNU 1
-
-/* if you have the Heimdal gssapi libraries */
-#cmakedefine HAVE_GSSHEIMDAL 1
-
-/* if you have the MIT gssapi libraries */
-#cmakedefine HAVE_GSSMIT 1
 
 /* Define to 1 if you have the `idna_strerror' function. */
 #cmakedefine HAVE_IDNA_STRERROR 1
@@ -596,17 +593,8 @@
 /* Define to 1 if you have the <utime.h> header file. */
 #cmakedefine HAVE_UTIME_H 1
 
-/* Define to 1 if you have the windows.h header file. */
-#cmakedefine HAVE_WINDOWS_H 1
-
-/* Define to 1 if you have the winsock2.h header file. */
-#cmakedefine HAVE_WINSOCK2_H 1
-
 /* Define this symbol if your OS supports changing the contents of argv */
 #cmakedefine HAVE_WRITABLE_ARGV 1
-
-/* Define to 1 if you have the ws2tcpip.h header file. */
-#cmakedefine HAVE_WS2TCPIP_H 1
 
 /* Define to 1 if you need the lber.h header file even with ldap.h */
 #cmakedefine NEED_LBER_H 1
@@ -710,9 +698,6 @@ ${SIZEOF_TIME_T_CODE}
 /* if libPSL is in use */
 #cmakedefine USE_LIBPSL 1
 
-/* If you want to build curl with the built-in manual */
-#cmakedefine USE_MANUAL 1
-
 /* if you want to use OpenLDAP code instead of legacy ldap implementation */
 #cmakedefine USE_OPENLDAP 1
 
@@ -734,6 +719,9 @@ ${SIZEOF_TIME_T_CODE}
 
 /* to enable quiche */
 #cmakedefine USE_QUICHE 1
+
+/* to enable openssl + nghttp3 */
+#cmakedefine USE_OPENSSL_QUIC 1
 
 /* Define to 1 if you have the quiche_conn_set_qlog_fd function. */
 #cmakedefine HAVE_QUICHE_CONN_SET_QLOG_FD 1
